@@ -20,6 +20,9 @@
 #![no_std]
 #![feature(ip_in_core)]
 #![feature(new_uninit)]
+#![feature(error_in_core)]
+
+pub mod netlink;
 
 #[macro_use]
 extern crate log;

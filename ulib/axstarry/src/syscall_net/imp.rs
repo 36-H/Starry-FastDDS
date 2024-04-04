@@ -4,6 +4,7 @@ use super::socket::*;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use alloc::sync::Arc;
+use alloc::string::String;
 
 use crate::{SyscallError, SyscallResult};
 use axerrno::AxError;
@@ -348,7 +349,10 @@ pub fn syscall_sendto(args: [usize; 6]) -> SyscallResult {
             }
 
             s.send(buf)
-        }
+        },
+        SocketInner::Netlink(s) => {
+            s.send(buf)
+        },
     };
 
     match send_result {

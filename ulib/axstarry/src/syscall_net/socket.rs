@@ -1,16 +1,14 @@
 extern crate alloc;
 use alloc::vec::Vec;
 use core::{
-    mem::size_of,
-    ptr::copy_nonoverlapping,
-    sync::atomic::{AtomicBool, AtomicU64},
+    mem::size_of, ptr::copy_nonoverlapping, sync::atomic::{AtomicBool, AtomicU64}
 };
 
 use alloc::string::String;
 use axerrno::{AxError, AxResult};
 use axfs::api::{FileIO, FileIOType, OpenFlags, Read, Write};
 
-use axlog::warn;
+use axlog::{warn,error};
 use axnet::{
     from_core_sockaddr, into_core_sockaddr, poll_interfaces, IpAddr, SocketAddr, TcpSocket,
     UdpSocket,
@@ -20,6 +18,9 @@ use num_enum::TryFromPrimitive;
 
 use crate::TimeVal;
 
+use crate::syscall_net::netlink::NetlinkSocket;
+use axprocess::current_process;
+
 pub const SOCKET_TYPE_MASK: usize = 0xFF;
 
 #[derive(TryFromPrimitive, Clone)]
@@ -28,6 +29,7 @@ pub const SOCKET_TYPE_MASK: usize = 0xFF;
 pub enum Domain {
     AF_UNIX = 1,
     AF_INET = 2,
+    AF_NETLINK = 16,
 }
 
 #[derive(TryFromPrimitive, PartialEq, Eq, Clone, Debug)]
@@ -158,6 +160,9 @@ impl SocketOption {
                             "[setsockopt()] set keep-alive for tcp socket not created, ignored"
                         ),
                     }),
+                    SocketInner::Netlink(_) => {
+                        warn!("[setsockopt()] set SO_KEEPALIVE on netlink socket, ignored")
+                    }
                 };
                 drop(inner);
                 socket.set_recv_buf_size(opt_value as u64);
@@ -251,6 +256,10 @@ impl SocketOption {
                         );
                             0},
                     }),
+                    SocketInner::Netlink(_) => {
+                        warn!("[getsockopt()] get SO_KEEPALIVE on netlink socket, returning false");
+                        0
+                    }
                 };
                 drop(inner);
 
@@ -389,6 +398,8 @@ pub enum SocketInner {
     Tcp(TcpSocket),
     /// UDP socket
     Udp(UdpSocket),
+    /// Netlink socket
+    Netlink(NetlinkSocket),
 }
 
 impl Socket {
@@ -443,6 +454,11 @@ impl Socket {
                 SocketInner::Tcp(TcpSocket::new())
             }
             SocketType::SOCK_DGRAM => SocketInner::Udp(UdpSocket::new()),
+            SocketType::SOCK_RAW => {
+                //
+                let pid = current_process().pid();
+                SocketInner::Netlink(NetlinkSocket::new(pid, 0))
+            }
             _ => unimplemented!(),
         };
         Self {
@@ -466,6 +482,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.set_nonblocking(nonblocking),
             SocketInner::Udp(s) => s.set_nonblocking(nonblocking),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -475,6 +492,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.is_nonblocking(),
             SocketInner::Udp(s) => s.is_nonblocking(),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -484,6 +502,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.is_connected(),
             SocketInner::Udp(s) => s.with_socket(|s| s.is_open()),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -493,6 +512,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.local_addr(),
             SocketInner::Udp(s) => s.local_addr(),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
         .map(from_core_sockaddr)
     }
@@ -503,6 +523,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.peer_addr(),
             SocketInner::Udp(s) => s.peer_addr(),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
         .map(from_core_sockaddr)
     }
@@ -513,6 +534,10 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.bind(into_core_sockaddr(addr)),
             SocketInner::Udp(s) => s.bind(into_core_sockaddr(addr)),
+            SocketInner::Netlink(_) => {
+                error!{"调用了bind"}
+                unimplemented!()
+            },
         }
     }
 
@@ -531,6 +556,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.listen(),
             SocketInner::Udp(_) => Err(AxError::Unsupported),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -545,6 +571,7 @@ impl Socket {
         let new_socket = match &*inner {
             SocketInner::Tcp(s) => s.accept()?,
             SocketInner::Udp(_) => Err(AxError::Unsupported)?,
+            SocketInner::Netlink(_) => unimplemented!(),
         };
         let addr = new_socket.peer_addr()?;
 
@@ -571,6 +598,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.connect(into_core_sockaddr(addr)),
             SocketInner::Udp(s) => s.connect(into_core_sockaddr(addr)),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -581,6 +609,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.local_addr().is_ok(),
             SocketInner::Udp(s) => s.local_addr().is_ok(),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
     #[allow(unused)]
@@ -590,6 +619,7 @@ impl Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.send(buf),
             SocketInner::Udp(s) => s.send_to(buf, into_core_sockaddr(addr)),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -614,6 +644,10 @@ impl Socket {
                     .recv_from(buf)
                     .map(|(val, addr)| (val, from_core_sockaddr(addr))),
             },
+            SocketInner::Netlink(s) => {
+                let addr = s.get_peer_addr();
+                s.read(buf).map(|len| (len, addr))
+            }
         }
     }
 
@@ -625,6 +659,7 @@ impl Socket {
                 s.shutdown();
             }
             SocketInner::Tcp(s) => s.close(),
+            SocketInner::Netlink(_) => unimplemented!(),
         };
     }
 
@@ -640,6 +675,7 @@ impl Socket {
                     s.abort();
                 }
             }),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 }
@@ -650,6 +686,7 @@ impl FileIO for Socket {
         match &mut *inner {
             SocketInner::Tcp(s) => s.read(buf),
             SocketInner::Udp(s) => s.read(buf),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -658,6 +695,7 @@ impl FileIO for Socket {
         match &mut *inner {
             SocketInner::Tcp(s) => s.write(buf),
             SocketInner::Udp(s) => s.write(buf),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -671,6 +709,7 @@ impl FileIO for Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.poll().map_or(false, |p| p.readable),
             SocketInner::Udp(s) => s.poll().map_or(false, |p| p.readable),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -680,6 +719,7 @@ impl FileIO for Socket {
         match &*inner {
             SocketInner::Tcp(s) => s.poll().map_or(false, |p| p.writable),
             SocketInner::Udp(s) => s.poll().map_or(false, |p| p.writable),
+            SocketInner::Netlink(_) => unimplemented!(),
         }
     }
 
@@ -735,6 +775,7 @@ pub unsafe fn socket_address_from(addr: *const u8) -> SocketAddr {
             let addr = IpAddr::v4(a[0], a[1], a[2], a[3]);
             SocketAddr { addr, port }
         }
+        Domain::AF_NETLINK => unimplemented!(),
     }
 }
 /// Only support INET (ipv4)

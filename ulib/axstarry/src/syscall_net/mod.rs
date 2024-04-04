@@ -5,6 +5,8 @@ mod imp;
 
 #[allow(unused)]
 mod socket;
+mod netlink;
+use axlog::error;
 use imp::*;
 pub use socket::Socket;
 mod net_syscall_id;

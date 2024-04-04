@@ -9,6 +9,7 @@ mod fs_syscall_id;
 pub use fs_syscall_id::FsSyscallId::{self, *};
 extern crate alloc;
 use imp::*;
+pub use ctype::pipe::PipeRingBuffer;
 
 /// 文件系统相关系统调用
 pub fn fs_syscall(syscall_id: fs_syscall_id::FsSyscallId, args: [usize; 6]) -> SyscallResult {
